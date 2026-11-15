@@ -87,6 +87,51 @@ def test_zone_hold_overrides_people_overnight():
     assert planner.planned_temp_at(events, dt.datetime(2026, 11, 18, 7, 45)) == 68
 
 
+def _samples():
+    """Synthetic day: heat on 04:00-07:00 at +1.5 F/h, then the room keeps rising: +1 F past the first heat-off sample, peaking 2 h after it, then -0.25 F/h."""
+    import learn
+    rows, temp = [], 66.0
+    base = dt.datetime(2026, 11, 10, 0, tzinfo=TZ)
+    for day in range(4):
+        for hour in range(24):
+            heating = 4 <= hour < 7
+            if heating:
+                temp += 1.5
+            elif hour in (7, 8, 9):
+                temp += 0.5
+            else:
+                temp = max(66.0, temp - 0.25)
+            rows.append({"ts": (base + dt.timedelta(days=day, hours=hour)).isoformat(), "outdoor_f": 45,
+                         "zones": {"down": {"current_f": temp, "target_f": 70.0, "heating": heating, "humidity": 50}}})
+    return learn, rows
+
+
+def test_learning_measures_warmup_overshoot_and_cooldown():
+    learn, rows = _samples()
+    got = learn.learn_zone(rows, "down")
+    assert got["warmup_rate_f_per_h"] == 1.5
+    assert got["overshoot_f"] == 1.0 and got["overshoot_peak_h"] == 2.0
+    assert got["cooldown_rate_f_per_h"] == 0.25
+    assert learn.learn_zone(rows[:5], "down")["warmup_rate_f_per_h"] is None  # not enough evidence
+
+
+def test_learned_overshoot_stages_the_warmup():
+    learn, rows = _samples()
+    p = profile()
+    zone = p["zones"][1]
+    zone["learned"] = learn.learn_zone(rows, "down")
+    days = planner._conditions(forecast(), dt.date(2026, 11, 16), 3)
+    events, _ = planner.plan_zone(zone, p, days, 50)
+    plain, _ = plan(1)
+    assert all(62 <= t <= 72 for _, t in events)
+    # During the warm-up the staged plan asks for less than the plain plan does.
+    when = dt.datetime(2026, 11, 17, 5, 30)
+    assert planner.planned_temp_at(events, when) < planner.planned_temp_at(plain, when)
+    # By the time people need it, both ask for the same temperature.
+    later = dt.datetime(2026, 11, 17, 12, 0)
+    assert planner.planned_temp_at(events, later) == planner.planned_temp_at(plain, later)
+
+
 def test_schedule_shape():
     events, _ = plan(0)
     sched = planner.to_nle_schedule(events)

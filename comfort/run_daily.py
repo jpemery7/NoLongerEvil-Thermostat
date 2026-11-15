@@ -17,6 +17,7 @@ from statistics import median
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import learn  # noqa: E402
 import nle  # noqa: E402
 import planner  # noqa: E402
 import weather  # noqa: E402
@@ -63,24 +64,41 @@ def load_history(path):
     return sorted((r for r in rows if isinstance(r, dict)), key=lambda r: str(r.get("ts")))
 
 
-def trim_from_history(history, device_id):
-    """Small correction from how the zone has tracked earlier plans (-1..+1 F).
+def load_samples(path):
+    """Hourly sample documents saved by sample.py (bare or data-store export)."""
+    rows = []
+    if path and os.path.isdir(path):
+        for f in sorted(pathlib.Path(path).rglob("*.json")):
+            try:
+                doc = _unwrap(json.loads(f.read_text()))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(doc, dict) and doc.get("ts") and isinstance(doc.get("zones"), dict):
+                rows.append(doc)
+    return rows
 
-    If the room has been running below what was planned at the time of each
-    daily check, nudge setpoints up, and vice versa.
-    """
-    errors = [
-        r["current_f"] - r["planned_f"]
-        for r in history[-14:]
-        if r.get("device_id") == device_id and r.get("planned_f") is not None and r.get("current_f") is not None
-        and r.get("planned_kind") != "setback"
-    ]
-    if len(errors) < 5:
+
+def trim_from_learning(learned):
+    """Small setpoint correction (-1..+1 F) from how the room sits relative to its
+    setpoint in the hours around heating. Rooms that are warm with the heat long
+    off are not evidence about the heating and are excluded by learn.py."""
+    error = learned.get("settled_error_f")
+    if error is None or abs(error) < 0.75:
         return 0.0
-    bias = median(errors)
-    if abs(bias) < 0.75:
-        return 0.0
-    return max(-1.0, min(1.0, -bias / 2))
+    return max(-1.0, min(1.0, -error / 2))
+
+
+def describe_learning(learned):
+    parts = []
+    if learned.get("warmup_rate_f_per_h"):
+        parts.append(f"warms {learned['warmup_rate_f_per_h']:g}°F per hour")
+    if learned.get("overshoot_f") is not None:
+        parts.append(f"rises {learned['overshoot_f']:g}°F more after the heat stops, peaking {learned.get('overshoot_peak_h', 0):g} h later")
+    if learned.get("cooldown_rate_f_per_h"):
+        parts.append(f"cools {learned['cooldown_rate_f_per_h']:g}°F per hour with the heat off")
+    if not parts:
+        return f"Measured behaviour: not enough data yet ({learned.get('samples', 0)} hourly samples); using intake-form answers"
+    return f"Measured behaviour from {learned.get('samples', 0)} hourly samples: " + "; ".join(parts)
 
 
 def fmt_time(minute_of_day):
@@ -92,6 +110,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile")
     ap.add_argument("--history", help="history .jsonl file or directory of saved run documents")
+    ap.add_argument("--samples", help="directory of hourly sample documents")
     ap.add_argument("--out", default="out")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
@@ -128,6 +147,7 @@ def main():
     forecast = weather.hourly_forecast(lat, lon)
     days = planner._conditions(forecast, now.date(), HORIZON_DAYS)
     history = load_history(args.history)
+    samples = load_samples(args.samples)
     outdoor_now = forecast[0]["temp_f"] if forecast else None
 
     result = {
@@ -150,7 +170,9 @@ def main():
         zid = zone["device_id"]
         st = status[zid]
         zone.setdefault("heater_delivery", st.get("heater_delivery"))
-        trim = trim_from_history(history, zid)
+        learned = learn.learn_zone(samples, zid)
+        zone["learned"] = learned
+        trim = trim_from_learning(learned)
         events, notes = planner.plan_zone(zone, profile, days, st.get("humidity") or 50, trim, bool(st.get("early_on")))
         schedule = planner.to_nle_schedule(events)
         previous = [r for r in history if r.get("device_id") == zid and r.get("events")]
@@ -191,6 +213,7 @@ def main():
             "schedule": schedule,
             "notes": notes,
             "trim_f": trim,
+            "learned": learned,
             "problems": zone_problems,
             "note": entry_note,
             "status": st,
@@ -229,7 +252,8 @@ def main():
         if z.get("note"):
             lines.append(f"- Note: {z['note']}")
         if z["trim_f"]:
-            lines.append(f"- History trim: {z['trim_f']:+.1f}°F")
+            lines.append(f"- Setpoints shifted {z['trim_f']:+.1f}°F because the room has been running {'below' if z['trim_f'] > 0 else 'above'} its setpoint around heating")
+        lines.append("- " + describe_learning(z["learned"]))
         for wd in horizon_weekdays:
             evs = [(m % 1440, t) for m, t in z["events"] if m // 1440 == wd]
             text = ", ".join(f"{fmt_time(m)} → {t:g}°F" for m, t in evs) or "no changes (holds previous setpoint)"

@@ -361,24 +361,44 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
     events = [e for i, e in enumerate(events) if e[1] != events[i - 1][1]] if len(events) > 1 else events
 
     # Radiant lead: start warm-ups early; start cool-downs early because the slab coasts.
+    # Measured behaviour (see learn.py) replaces the intake-form answers once there is enough of it.
+    learned = zone.get("learned") or {}
     rate0 = WARMUP_RATE_F_PER_H.get(zone.get("warmup", "unknown"), 0.75)
+    if learned.get("warmup_rate_f_per_h"):
+        rate0 = min(3.0, max(0.2, learned["warmup_rate_f_per_h"]))
     # Zones with a requested hold keep it to the minute it ends rather than coasting down early.
-    coast_h = float(zone.get("coast_h", 0.0 if zone.get("holds") else 1.0))
+    default_coast = 1.0
+    if learned.get("cooldown_rate_f_per_h"):
+        default_coast = min(3.0, max(0.5, 1.0 / learned["cooldown_rate_f_per_h"]))  # hours to lose 1 F
+    if learned.get("overshoot_peak_h"):
+        default_coast = min(3.0, max(default_coast, learned["overshoot_peak_h"]))
+    coast_h = float(zone.get("coast_h", 0.0 if zone.get("holds") else default_coast))
     # Bedrooms get a shorter lead so the room is not warmed for hours while people sleep.
     max_lead_h = float(zone.get("max_lead_h", 2.0 if "bedroom" in (zone.get("uses") or []) else 3.0))
+    overshoot = min(2.0, learned.get("overshoot_f") or 0.0)
     shifted = []
+
+    def place(start, temp):
+        # A change that now starts before earlier ones overrides them.
+        while shifted and shifted[-1][0] >= start:
+            shifted.pop()
+        shifted.append((start, temp))
+
     for idx, (minute, temp, tout_f) in enumerate(events):
         before = events[idx - 1][1]
         if temp > before:
             rate = rate0 * min(1.2, max(0.4, 1 - (45 - tout_f) / 60))
             lead_h = 0.0 if early_on else min(max_lead_h, max(0.5, (temp - before) / rate))
+            start = minute - int(round(lead_h * 4)) * 15
+            if overshoot >= 1.0 and temp - overshoot > before and start < minute:
+                # The room keeps rising after the heat stops: aim short during the
+                # warm-up and ask for the full temperature only when it is needed.
+                place(start, temp - overshoot)
+                place(minute, temp)
+            else:
+                place(start, temp)
         else:
-            lead_h = coast_h
-        start = minute - int(round(lead_h * 4)) * 15
-        # A change that now starts before earlier ones overrides them.
-        while shifted and shifted[-1][0] >= start:
-            shifted.pop()
-        shifted.append((start, temp))
+            place(minute - int(round(coast_h * 4)) * 15, temp)
     shifted = sorted((m % WEEK_MIN, t) for m, t in shifted)
     cleaned = []
     for minute, temp in shifted:
