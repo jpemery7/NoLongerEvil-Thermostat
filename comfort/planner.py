@@ -185,6 +185,20 @@ def sleep_target_f(person, zone, house, tout_c):
     return c2f(air_for_operative_c(top, tout_c, k))
 
 
+def zone_hold_f(zone, minute):
+    """Fixed temperature requested for this zone at this minute of the day, if any."""
+    for h in zone.get("holds") or []:
+        if h.get("temp_f") in (None, ""):
+            continue
+        start, end = _hhmm(h.get("from"), None), _hhmm(h.get("to"), None)
+        if start is None or end is None or start == end:
+            continue
+        inside = start <= minute < end if start < end else (minute >= start or minute < end)
+        if inside:
+            return float(h["temp_f"])
+    return None
+
+
 def combine(targets):
     """Minimise the worst deviation, without leaving a vulnerable person more than 1 F short."""
     values = [t for t, _ in targets]
@@ -263,6 +277,11 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
                     # Clamp to the house limits before combining, so the compromise is
                     # between temperatures that can actually be scheduled.
                     awake.append((min(hi, max(lo, want)), vulnerable, p))
+            hold = zone_hold_f(zone, minute)
+            if hold is not None and not on_vacation:
+                # A fixed temperature the household asked for in this zone at this time of day.
+                slots[weekday * 1440 + minute] = (min(hi, max(lo, hold)), "hold", hour["temp_f"])
+                continue
             if sleepers and awake:
                 target = (combine([(t, v) for t, v, _ in sleepers]) + combine([(t, v) for t, v, _ in awake])) / 2
                 kind = "mixed"
@@ -343,7 +362,8 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
 
     # Radiant lead: start warm-ups early; start cool-downs early because the slab coasts.
     rate0 = WARMUP_RATE_F_PER_H.get(zone.get("warmup", "unknown"), 0.75)
-    coast_h = float(zone.get("coast_h", 1.0))
+    # Zones with a requested hold keep it to the minute it ends rather than coasting down early.
+    coast_h = float(zone.get("coast_h", 0.0 if zone.get("holds") else 1.0))
     # Bedrooms get a shorter lead so the room is not warmed for hours while people sleep.
     max_lead_h = float(zone.get("max_lead_h", 2.0 if "bedroom" in (zone.get("uses") or []) else 3.0))
     shifted = []

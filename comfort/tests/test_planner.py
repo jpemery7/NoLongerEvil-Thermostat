@@ -77,6 +77,16 @@ def test_household_choice_for_shared_rooms():
     assert planner.planned_temp_at(events, dt.datetime(2026, 11, 17, 19, 0)) == 71.5
 
 
+def test_zone_hold_overrides_people_overnight():
+    p = profile()
+    p["zones"][0]["holds"] = [{"from": "20:00", "to": "08:00", "temp_f": 68}]
+    days = planner._conditions(forecast(), dt.date(2026, 11, 16), 3)
+    events, _ = planner.plan_zone(p["zones"][0], p, days, 50)
+    for hour in (20, 23, 3, 7):
+        assert planner.planned_temp_at(events, dt.datetime(2026, 11, 18, hour, 30)) == 68
+    assert planner.planned_temp_at(events, dt.datetime(2026, 11, 18, 7, 45)) == 68
+
+
 def test_schedule_shape():
     events, _ = plan(0)
     sched = planner.to_nle_schedule(events)
