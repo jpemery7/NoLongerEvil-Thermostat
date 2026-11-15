@@ -236,6 +236,7 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
     setback = float(prefs.get("setback_f", 2.0)) if prefs.get("setback_ok", True) else 0.0
     vacations = [(dt.date.fromisoformat(v["from"]), dt.date.fromisoformat(v["to"])) for v in prefs.get("vacations", []) if v.get("from") and v.get("to")]
     sun_factor = SUN_FACTOR.get(zone.get("sun", "medium"), 0.5)
+    shared_f = float(prefs["shared_awake_f"]) if prefs.get("shared_awake_f") else None
 
     slots = {}  # minute_of_week -> (temp_f or None, kind)
     deviations = {}
@@ -269,6 +270,10 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
                 target, kind = combine([(t, v) for t, v, _ in sleepers]), "sleep"
             elif awake:
                 target, kind = combine([(t, v) for t, v, _ in awake]), "awake"
+                temps = [t for t, _, _ in awake]
+                if shared_f is not None and max(temps) - min(temps) > 1.0:
+                    # The household chose a temperature for rooms shared by people who disagree.
+                    target = min(max(temps), max(min(temps), shared_f))
                 if 9 * 60 <= minute < 15 * 60:  # let forecast sun do some of the work
                     target -= 1.0 * sun_factor * hour["sun"]
             else:

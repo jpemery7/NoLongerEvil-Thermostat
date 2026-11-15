@@ -69,6 +69,14 @@ def test_sun_lowers_midday_target_in_sunny_zone():
     assert planner.planned_temp_at(sunny, when) < planner.planned_temp_at(cloudy, when)
 
 
+def test_household_choice_for_shared_rooms():
+    p = profile()
+    p["preferences"]["shared_awake_f"] = 71.5
+    days = planner._conditions(forecast(), dt.date(2026, 11, 16), 3)
+    events, _ = planner.plan_zone(p["zones"][1], p, days, 50)
+    assert planner.planned_temp_at(events, dt.datetime(2026, 11, 17, 19, 0)) == 71.5
+
+
 def test_schedule_shape():
     events, _ = plan(0)
     sched = planner.to_nle_schedule(events)
