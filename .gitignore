@@ -122,4 +122,7 @@ next-env.d.ts
 firmware/builder/firmware/
 
 # Docker compose
-server/docker-compose.yml
+server/docker-compose.ymlcomfort/data/
+comfort/config/household*.json
+comfort/out/
+__pycache__/

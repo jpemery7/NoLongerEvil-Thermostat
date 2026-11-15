@@ -1,0 +1,2 @@
+requests
+pythermalcomfort>=3.0
