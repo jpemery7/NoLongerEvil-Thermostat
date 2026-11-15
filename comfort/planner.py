@@ -24,6 +24,7 @@ WEEK_MIN = 7 * 24 * 60
 HARD_MIN_F, HARD_MAX_F = 55.0, 76.0  # never schedule outside this, whatever the profile says
 REF_TOUT_C = 7.0  # typical Seattle heating-season outdoor temperature
 MAX_EVENTS_PER_DAY = 8
+TRANSITION_MIN = 90  # time spent in the bedroom zone after waking and before bed
 
 ENVELOPE_K = {"poor": 0.12, "average": 0.08, "good": 0.05, "excellent": 0.03}
 WINDOW_K = {"single": 0.03, "double": 0.0, "triple": -0.01}
@@ -127,8 +128,8 @@ def person_state(person, weekday, minute, shared_zones):
         return "absent", set()
     zones = set()
     evening_start = back if back is not None else 17 * 60
-    winding_down = (bed >= 12 * 60 and minute >= bed - 45) or (bed < 12 * 60 and (minute >= 24 * 60 - 45 + bed or minute < bed))
-    if minute < wake + 45 or winding_down:
+    winding_down = (bed >= 12 * 60 and minute >= bed - TRANSITION_MIN) or (bed < 12 * 60 and (minute >= 24 * 60 - TRANSITION_MIN + bed or minute < bed))
+    if minute < wake + TRANSITION_MIN or winding_down:
         if bedroom:
             zones.add(bedroom)
     morning_end = leave if leave is not None else wake + 120
@@ -142,11 +143,11 @@ def person_state(person, weekday, minute, shared_zones):
 def in_bedroom_transition(person, weekday, minute):
     """True while a person is briefly awake in their bedroom zone (just up, or winding down)."""
     wake, bed, _, _ = person_times(person, weekday)
-    if wake <= minute < wake + 45:
+    if wake <= minute < wake + TRANSITION_MIN:
         return True
     if bed >= 12 * 60:
-        return bed - 45 <= minute < bed
-    return minute >= 24 * 60 - 45 + bed or minute < bed
+        return bed - TRANSITION_MIN <= minute < bed
+    return minute >= 24 * 60 - TRANSITION_MIN + bed or minute < bed
 
 
 def awake_target_f(person, zone, house, tout_c, tout_6am_c, rh):
@@ -297,7 +298,8 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
         gap_h = (j - i) * SLOT_MIN / 60
         before = slots[order[(i - 1) % n]][0]
         after = slots[order[j % n]][0]
-        anchor = max(x for x in (before, after, lo) if x is not None)
+        # Set back from the temperature the zone must recover to, not the one it is leaving.
+        anchor = after if after is not None else (before if before is not None else lo)
         if kind == "vacation":
             value = max(HARD_MIN_F, float(prefs.get("away_f", 58)))
         elif gap_h < 3 or setback == 0:
