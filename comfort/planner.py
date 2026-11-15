@@ -156,9 +156,13 @@ def awake_target_f(person, zone, house, tout_c, tout_6am_c, rh):
     # People at home change indoor clothing only a little with the weather.
     adapts = CLOTHING_ADAPTS.get(person.get("clothing_adapts", "some"), 0.1)
     clo = base_clo + adapts * (clo_dynamic(tout_6am_c) - clo_dynamic(REF_TOUT_C))
-    met = ZONE_MET.get((zone.get("uses") or ["living"])[0], 1.1)
+    # The least active use of the zone governs: people cooking tolerate a room set for sitting.
+    met = min(ZONE_MET.get(u, 1.1) for u in (zone.get("uses") or ["living"]))
     pref = person.get("awake_pref_f")
     if pref:
+        # A stated preference already reflects how the person sits around at home;
+        # only more active zones move it (downwards).
+        met = max(met, 1.1)
         reference = c2f(air_for_operative_c(neutral_operative_c(1.1, base_clo, 50), REF_TOUT_C, k))
         offset, shift = float(pref) - reference, 0.0
     else:
@@ -247,14 +251,16 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
                 state, zones = person_state(p, weekday, minute, shared)
                 vulnerable = p.get("age_group") in VULNERABLE
                 if state == "sleep" and zid in zones:
-                    sleepers.append((sleep_target_f(p, zone, house, tout_c), vulnerable, p))
+                    sleepers.append((min(hi, max(lo, sleep_target_f(p, zone, house, tout_c))), vulnerable, p))
                 elif state == "awake" and zid in zones:
                     want = awake_target_f(p, zone, house, tout_c, tout_6am_c, indoor_rh)
                     regular = set(p.get("evening_zones") or shared) | set(p.get("day_zones") or [])
                     if zid == p.get("bedroom_zone") and zid not in regular and in_bedroom_transition(p, weekday, minute):
                         # Getting up or going to bed: a little warmer than sleeping, not full daytime warmth.
                         want = min(want, sleep_target_f(p, zone, house, tout_c) + 2.5)
-                    awake.append((want, vulnerable, p))
+                    # Clamp to the house limits before combining, so the compromise is
+                    # between temperatures that can actually be scheduled.
+                    awake.append((min(hi, max(lo, want)), vulnerable, p))
             if sleepers and awake:
                 target = (combine([(t, v) for t, v, _ in sleepers]) + combine([(t, v) for t, v, _ in awake])) / 2
                 kind = "mixed"
@@ -316,6 +322,18 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
     if len(events) > 1 and events[0][1] == events[-1][1]:
         events.pop(0)  # the week is cyclic
 
+    # A slab cannot serve a target that lasts under 90 minutes: hold the previous one instead.
+    changed = True
+    while changed and len(events) > 2:
+        changed = False
+        for idx in range(len(events)):
+            nxt = events[(idx + 1) % len(events)]
+            if (nxt[0] - events[idx][0]) % WEEK_MIN < 90:
+                events.pop(idx)
+                changed = True
+                break
+    events = [e for i, e in enumerate(events) if e[1] != events[i - 1][1]] if len(events) > 1 else events
+
     # Radiant lead: start warm-ups early; start cool-downs early because the slab coasts.
     rate0 = WARMUP_RATE_F_PER_H.get(zone.get("warmup", "unknown"), 0.75)
     coast_h = float(zone.get("coast_h", 1.0))
@@ -329,8 +347,12 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
             lead_h = 0.0 if early_on else min(max_lead_h, max(0.5, (temp - before) / rate))
         else:
             lead_h = coast_h
-        shifted.append(((minute - int(round(lead_h * 4)) * 15) % WEEK_MIN, temp))
-    shifted.sort()
+        start = minute - int(round(lead_h * 4)) * 15
+        # A change that now starts before earlier ones overrides them.
+        while shifted and shifted[-1][0] >= start:
+            shifted.pop()
+        shifted.append((start, temp))
+    shifted = sorted((m % WEEK_MIN, t) for m, t in shifted)
     cleaned = []
     for minute, temp in shifted:
         if cleaned and cleaned[-1][0] == minute:

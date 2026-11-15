@@ -171,8 +171,15 @@ def main():
         zone_problems = []
         if not st.get("can_heat"):
             zone_problems.append("thermostat reports it cannot heat")
-        if st.get("schedule_mode") != "HEAT":
-            zone_problems.append(f"schedule mode is {st.get('schedule_mode')}, expected HEAT")
+        mode = st.get("schedule_mode")
+        if mode is None:
+            # The service sometimes returns a partial device record; fall back to the stored schedule.
+            mode = (nle.get_schedule(zid) or {}).get("schedule_mode")
+            entry_note = "thermostat state was incomplete on this read (humidity assumed 50%)"
+        else:
+            entry_note = None
+        if mode != "HEAT" or st.get("target_type") not in ("heat", None):
+            zone_problems.append(f"schedule mode is {mode}, expected HEAT")
         if st.get("learning_mode"):
             zone_problems.append("Nest learning is on and may rewrite the schedule")
         if any(not (planner.HARD_MIN_F <= t <= planner.HARD_MAX_F) for _, t in events) or not events:
@@ -185,6 +192,7 @@ def main():
             "notes": notes,
             "trim_f": trim,
             "problems": zone_problems,
+            "note": entry_note,
             "status": st,
             "applied": False,
         }
@@ -215,9 +223,11 @@ def main():
         st = z["status"]
         lines += ["", f"## {z['name']}", ""]
         cur = f"{planner.c2f(st['current_c']):.1f}°F" if st.get("current_c") is not None else "unknown"
-        lines.append(f"Now {cur}, humidity {st.get('humidity')}%, heating {'on' if st.get('heating_now') else 'off'}.")
+        lines.append(f"Now {cur}, humidity {st.get('humidity') if st.get('humidity') is not None else 'unknown '}%, heating {'on' if st.get('heating_now') else 'off'}.")
         for p in z["problems"]:
             lines.append(f"- Problem: {p}")
+        if z.get("note"):
+            lines.append(f"- Note: {z['note']}")
         if z["trim_f"]:
             lines.append(f"- History trim: {z['trim_f']:+.1f}°F")
         for wd in horizon_weekdays:
