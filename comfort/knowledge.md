@@ -1,9 +1,9 @@
 # Running thermostat schedules for human comfort
 
 Working notes the planner is built on. Each rule says where it comes from and
-how firm it is. "Standard" items are from ASHRAE 55 / ISO 7730 as commonly
-summarised and were not re-read from the standards text; treat exact figures as
-approximate.
+how firm it is. Figures attributed to ASHRAE 55 and ISO 7730 come from
+secondary summaries and papers that quote them, not from the standards' own
+text.
 
 ## 1. What comfort depends on
 
@@ -60,10 +60,12 @@ All four zones are gas-fired in-floor radiant, heat only.
 - Recovery must start well before people need the heat, and heat can be cut
   before they leave or go to bed because the slab keeps emitting.
 - Aggressive boiler outdoor reset slows recovery further.
-- Floor surface temperature for comfort is usually kept within about 19-29 C
-  (standard; not verified this session). A setpoint the system cannot reach in
-  time only produces long boiler runs, so the planner caps how far ahead it
-  will start a warm-up.
+- Floor surface temperature: ISO 7730:2005 gives 19-29 C for people in normal
+  shoes (under 10% dissatisfied), 17-31 C for its loosest class; ASHRAE 55 uses
+  the same 19-29 C range. This caps how hard a floor can be driven, so a
+  setpoint the system cannot reach in time only produces long boiler runs. The
+  planner caps how far ahead it will start a warm-up. (A 2025 edition of ISO
+  7730 exists; its figures were not checked.)
 - Rules used: setback 2 F by default and only for gaps of 3 hours or more;
   warm-ups start early by (temperature rise / zone warm-up rate), slower when
   colder outside, capped at 3 hours (2 in bedroom zones); cool-downs start 1
@@ -85,9 +87,11 @@ All four zones are gas-fired in-floor radiant, heat only.
 
 - The planner never schedules below 55 F or above 76 F regardless of profile,
   and stays inside the household's own minimum and maximum.
-- WHO housing guidance is commonly cited as recommending at least 18 C (64 F)
-  for occupied homes in cold seasons, higher for vulnerable people (not
-  verified this session).
+- WHO Housing and Health Guidelines (2018): indoor temperatures should be high
+  enough to protect against cold; 18 C (64 F) is given as a starting point, not
+  a hard threshold, drawn from earlier findings of no demonstrable risk to
+  healthy sedentary people between 18 and 24 C. A higher minimum may be needed
+  for older people, children and people with chronic illness.
 - Infants and older adults are never left more than 1 F below their own target
   when sharing a zone.
 - Nest schedules: push the complete 7-day schedule, at least 15 seconds apart;
@@ -115,4 +119,7 @@ All four zones are gas-fired in-floor radiant, heat only.
 - Thermal comfort diversity review: https://pmc.ncbi.nlm.nih.gov/articles/PMC6298492
 - Forecast-based radiant floor control (Cesari et al. 2022): https://iris.unife.it/bitstream/11392/2475553/1/2022_A%20weather%20forecast%20based%20control.pdf
 - Floor heating MPC (Zanetti et al. 2022): https://re.public.polimi.it/retrieve/bf1c8622-4bd9-4c11-b61f-5aec4979e94c/Floor%20heating%20pre-onoff%20parameters%20based%20on%20Model%20Predictive%20Control%20feature%20extrapolation.pdf
+- ISO 7730 floor temperature limits (REHVA): https://rehva.eu/rehva-journal/chapter/iso-11855-the-international-standard-on-the-design-dimensioning-installation-and-control-of-embedded-radiant-heating-and-cooling-systems
+- Comfortable floor temperatures (Wu et al.): https://acris.aalto.fi/ws/portalfiles/portal/66233514/ENG_Wu_et_al_Comfortable_floor_temperatures_for_radiant_Chinese_Science_Bulletin.pdf
+- WHO Housing and Health Guidelines, low indoor temperatures: https://www.ncbi.nlm.nih.gov/books/NBK535294/
 - NLE schedule API: https://docs.nolongerevil.com/api-reference/v1/schedule
