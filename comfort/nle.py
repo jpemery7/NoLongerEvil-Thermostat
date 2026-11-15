@@ -15,10 +15,20 @@ _HEADERS = {"Authorization": f"Bearer {_KEY}", "Content-Type": "application/json
 PUSH_DEBOUNCE_S = 16  # docs: wait >= 15 s between schedule pushes
 
 
-def _get(path):
-    r = requests.get(f"{BASE}{path}", headers=_HEADERS, timeout=30)
-    r.raise_for_status()
-    return r.json()
+def _get(path, attempts=4):
+    """GET with retries: the hosted API occasionally times out or returns a 5xx."""
+    for attempt in range(attempts):
+        try:
+            r = requests.get(f"{BASE}{path}", headers=_HEADERS, timeout=45)
+            if r.status_code < 500:
+                r.raise_for_status()
+                return r.json()
+            error = requests.HTTPError(f"{r.status_code} from {path}")
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            error = exc
+        if attempt < attempts - 1:
+            time.sleep(5 * (attempt + 1))
+    raise error
 
 
 def list_devices():
