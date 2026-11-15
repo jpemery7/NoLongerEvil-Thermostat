@@ -338,6 +338,14 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
         elif not cleaned or cleaned[-1][1] != temp:
             cleaned.append((minute, temp))
 
+    # A slab cannot follow half-degree wiggles: keep only steps of at least 1 F.
+    if len(cleaned) > 2:
+        kept = [cleaned[0]]
+        for minute, temp in cleaned[1:]:
+            if abs(temp - kept[-1][1]) >= 1.0:
+                kept.append((minute, temp))
+        cleaned = kept
+
     # Respect the per-day event budget by dropping the smallest steps.
     by_day = {}
     for minute, temp in cleaned:

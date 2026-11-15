@@ -36,17 +36,31 @@ def default_profile(devices):
     return {"confirmed": False, "placeholder": True, "house": {}, "zones": zones, "people": people, "preferences": {}}
 
 
+def _unwrap(doc):
+    """Accept either a bare document or a data-store export wrapped as {"id", "data", "version"}."""
+    if isinstance(doc, dict) and isinstance(doc.get("data"), dict) and ("version" in doc or "id" in doc):
+        return doc["data"]
+    return doc
+
+
 def load_history(path):
+    """Observation records from earlier runs: a .jsonl file, or a directory of saved run documents."""
     rows = []
-    if path and os.path.exists(path):
+    if not path or not os.path.exists(path):
+        return rows
+    if os.path.isdir(path):
+        for f in sorted(pathlib.Path(path).rglob("*.json")):
+            try:
+                rows.extend(_unwrap(json.loads(f.read_text())).get("observations") or [])
+            except (json.JSONDecodeError, AttributeError):
+                pass
+    else:
         for line in open(path):
-            line = line.strip()
-            if line:
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    return rows
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return sorted((r for r in rows if isinstance(r, dict)), key=lambda r: str(r.get("ts")))
 
 
 def trim_from_history(history, device_id):
@@ -77,7 +91,7 @@ def fmt_time(minute_of_day):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile")
-    ap.add_argument("--history")
+    ap.add_argument("--history", help="history .jsonl file or directory of saved run documents")
     ap.add_argument("--out", default="out")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
@@ -97,7 +111,7 @@ def main():
 
     profile = None
     if args.profile and os.path.exists(args.profile):
-        profile = json.load(open(args.profile))
+        profile = _unwrap(json.load(open(args.profile)))
     if not profile or not profile.get("zones"):
         profile = default_profile(devices)
     known = {d["id"] for d in devices}
@@ -218,6 +232,8 @@ def main():
     result["report_md"] = report
     (out / "report.md").write_text(report)
     (out / "result.json").write_text(json.dumps(result, indent=1, default=str))
+    (out / "latest.json").write_text(json.dumps({"report_md": report, "run_at": result["run_at"], "applied": result["applied"]}))
+    (out / "run_id.txt").write_text(now.strftime("%Y-%m-%dT%H%M"))
     print(report)
 
 
