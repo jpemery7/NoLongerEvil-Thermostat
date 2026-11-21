@@ -330,6 +330,10 @@ def plan_zone(zone, profile, days, indoor_rh, trim_f=0.0, early_on=False):
             value = anchor
         else:
             value = max(lo, anchor - setback)
+            if zone.get("empty_f") is not None:
+                # Per-zone tuning: a room that stays warm from its neighbours can sit lower
+                # while empty. It only ever lowers the setback, never raises it.
+                value = max(lo, min(value, float(zone["empty_f"])))
         for m in range(i, min(j, n)):
             filled[order[m]] = (value, slots[order[m]][2])
         if j >= n:

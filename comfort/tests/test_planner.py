@@ -150,3 +150,46 @@ if __name__ == "__main__":
     for i in (0, 1):
         events, notes = plan(i)
         print(i, notes, [(planner.WEEKDAYS[m // 1440], f"{m % 1440 // 60:02d}:{m % 60:02d}", t) for m, t in events if m // 1440 in (1, 5)])
+
+
+def _weekday_events(events, weekday):
+    return [(m % 1440, t) for m, t in events if m // 1440 == weekday]
+
+
+def test_empty_f_only_lowers_long_empty_stretches():
+    base, _ = plan(0)
+    p = profile()
+    p["zones"][0]["empty_f"] = 63
+    days = planner._conditions(forecast(), dt.date(2026, 11, 16), 3)
+    tuned, _ = planner.plan_zone(p["zones"][0], p, days, 50)
+    # The bedroom is empty through the day: the tuned plan reaches 63 F there, the base plan does not.
+    at_noon_tue = lambda evs: [t for m, t in sorted(evs) if m <= 1440 + 12 * 60][-1]
+    assert at_noon_tue(tuned) == 63
+    assert at_noon_tue(base) > 63
+    # A setting above the normal setback changes nothing.
+    p["zones"][0]["empty_f"] = 72
+    same, _ = planner.plan_zone(p["zones"][0], p, days, 50)
+    assert same == base
+
+
+def test_max_lead_zero_rises_on_time():
+    p = profile()
+    days = planner._conditions(forecast(temp_f=35), dt.date(2026, 11, 16), 3)
+    early, _ = planner.plan_zone(p["zones"][0], p, days, 50)
+    p["zones"][0]["max_lead_h"] = 0
+    on_time, _ = planner.plan_zone(p["zones"][0], p, days, 50)
+    first_rise = lambda evs: min(m for i, (m, t) in enumerate(evs) if i and t > evs[i - 1][1])
+    assert first_rise(_weekday_events(on_time, 1)) > first_rise(_weekday_events(early, 1))
+
+
+def test_tuning_file_is_clamped_and_filtered(tmp_path=None):
+    import json, tempfile
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+    import run_daily
+    d = pathlib.Path(tmp_path or tempfile.mkdtemp())
+    f = d / "tuning.json"
+    f.write_text(json.dumps({"id": "zones", "version": 1, "data": {"zones": {
+        "a": {"trim_f": -9, "empty_f": 66, "bogus": 1, "max_lead_h": True},
+        "b": {"note": "nothing usable"}}}}))
+    assert run_daily.load_tuning(str(f)) == {"a": {"trim_f": -3.0, "empty_f": 66.0}}
+    assert run_daily.load_tuning(str(d / "missing.json")) == {}

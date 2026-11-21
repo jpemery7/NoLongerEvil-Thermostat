@@ -78,6 +78,35 @@ def load_samples(path):
     return rows
 
 
+# Per-zone tuning the household can set outside the intake form (so saving the form
+# never wipes it). Only these keys are read; anything else in the file is ignored.
+TUNING_KEYS = {
+    "trim_f": (-3.0, 1.0),      # added to every occupied target, after learning's own trim
+    "empty_f": (55.0, 76.0),    # ceiling for long unoccupied stretches (only ever lowers)
+    "max_lead_h": (0.0, 4.0),   # longest warm-up started ahead of a rise; 0 = rise on time
+    "coast_h": (0.0, 3.0),      # how early a drop starts, to let the slab coast
+}
+
+
+def load_tuning(path):
+    """{device_id: {key: value}} from a tuning file shaped {"zones": {device_id: {...}}}."""
+    if not path or not os.path.exists(path):
+        return {}
+    doc = _unwrap(json.load(open(path)))
+    out = {}
+    for zid, raw in ((doc or {}).get("zones") or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        clean = {}
+        for key, (lo, hi) in TUNING_KEYS.items():
+            value = raw.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                clean[key] = min(hi, max(lo, float(value)))
+        if clean:
+            out[zid] = clean
+    return out
+
+
 def trim_from_learning(learned):
     """Small setpoint correction (-1..+1 F) from how the room sits relative to its
     setpoint in the hours around heating. Rooms that are warm with the heat long
@@ -111,6 +140,7 @@ def main():
     ap.add_argument("--profile")
     ap.add_argument("--history", help="history .jsonl file or directory of saved run documents")
     ap.add_argument("--samples", help="directory of hourly sample documents")
+    ap.add_argument("--tuning", help="per-zone tuning file {\"zones\": {device_id: {trim_f, empty_f, max_lead_h, coast_h}}}")
     ap.add_argument("--out", default="out")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
@@ -135,6 +165,12 @@ def main():
         profile = default_profile(devices)
     known = {d["id"] for d in devices}
     zones = [z for z in profile["zones"] if z.get("device_id") in known]
+    tuning = load_tuning(args.tuning)
+    for z in zones:
+        z["tuning"] = tuning.get(z["device_id"], {})
+        for key in ("empty_f", "max_lead_h", "coast_h"):
+            if key in z["tuning"]:
+                z[key] = z["tuning"][key]
     problems = []
     if profile.get("placeholder"):
         problems.append("No household profile yet: planned with placeholder occupants. Fill in the intake form.")
@@ -172,7 +208,7 @@ def main():
         zone.setdefault("heater_delivery", st.get("heater_delivery"))
         learned = learn.learn_zone(samples, zid)
         zone["learned"] = learned
-        trim = trim_from_learning(learned)
+        trim = max(-3.0, min(1.0, trim_from_learning(learned) + zone["tuning"].get("trim_f", 0.0)))
         events, notes = planner.plan_zone(zone, profile, days, st.get("humidity") or 50, trim, bool(st.get("early_on")))
         schedule = planner.to_nle_schedule(events)
         previous = [r for r in history if r.get("device_id") == zid and r.get("events")]
@@ -213,6 +249,7 @@ def main():
             "schedule": schedule,
             "notes": notes,
             "trim_f": trim,
+            "tuning": zone.get("tuning") or {},
             "learned": learned,
             "problems": zone_problems,
             "note": entry_note,
@@ -251,8 +288,11 @@ def main():
             lines.append(f"- Problem: {p}")
         if z.get("note"):
             lines.append(f"- Note: {z['note']}")
+        tun = z.get("tuning") or {}
+        if tun:
+            lines.append("- Household tuning: " + ", ".join(f"{k} {v:g}" for k, v in sorted(tun.items())))
         if z["trim_f"]:
-            lines.append(f"- Setpoints shifted {z['trim_f']:+.1f}°F because the room has been running {'below' if z['trim_f'] > 0 else 'above'} its setpoint around heating")
+            lines.append(f"- Setpoints shifted {z['trim_f']:+.1f}°F (learned from how the room runs against its setpoint, plus any household tuning)")
         lines.append("- " + describe_learning(z["learned"]))
         for wd in horizon_weekdays:
             evs = [(m % 1440, t) for m, t in z["events"] if m // 1440 == wd]
