@@ -206,10 +206,20 @@ def main():
         zid = zone["device_id"]
         st = status[zid]
         zone.setdefault("heater_delivery", st.get("heater_delivery"))
+        humidity, humidity_note = st.get("humidity"), None
+        if humidity is None:
+            # Partial device record: use the most recent hourly sample that has it.
+            for s in sorted(samples, key=lambda s: str(s.get("ts")), reverse=True):
+                h = ((s.get("zones") or {}).get(zid) or {}).get("humidity")
+                if h is not None:
+                    humidity, humidity_note = h, f"humidity not reported on this read; used {h}% from the {str(s.get('ts'))[:16]} sample"
+                    break
+            else:
+                humidity, humidity_note = 50, "humidity not reported on this read or in any sample; assumed 50%"
         learned = learn.learn_zone(samples, zid)
         zone["learned"] = learned
         trim = max(-3.0, min(1.0, trim_from_learning(learned) + zone["tuning"].get("trim_f", 0.0)))
-        events, notes = planner.plan_zone(zone, profile, days, st.get("humidity") or 50, trim, bool(st.get("early_on")))
+        events, notes = planner.plan_zone(zone, profile, days, humidity, trim, bool(st.get("early_on")))
         schedule = planner.to_nle_schedule(events)
         previous = [r for r in history if r.get("device_id") == zid and r.get("events")]
         planned_now = planner.planned_temp_at(previous[-1]["events"], now) if previous else None
@@ -227,15 +237,16 @@ def main():
             }
         )
         zone_problems = []
-        if not st.get("can_heat"):
+        if st.get("can_heat") is False:
             zone_problems.append("thermostat reports it cannot heat")
         mode = st.get("schedule_mode")
         if mode is None:
             # The service sometimes returns a partial device record; fall back to the stored schedule.
             mode = (nle.get_schedule(zid) or {}).get("schedule_mode")
-            entry_note = "thermostat state was incomplete on this read (humidity assumed 50%)"
-        else:
-            entry_note = None
+        notes_now = [n for n in (humidity_note,) if n]
+        if st.get("current_source") == "backplate":
+            notes_now.append("room temperature not reported on this read; used the thermostat's own sensor reading")
+        entry_note = "; ".join(notes_now) or None
         if mode != "HEAT" or st.get("target_type") not in ("heat", None):
             zone_problems.append(f"schedule mode is {mode}, expected HEAT")
         if st.get("learning_mode"):
@@ -283,7 +294,7 @@ def main():
         st = z["status"]
         lines += ["", f"## {z['name']}", ""]
         cur = f"{planner.c2f(st['current_c']):.1f}°F" if st.get("current_c") is not None else "unknown"
-        lines.append(f"Now {cur}, humidity {st.get('humidity') if st.get('humidity') is not None else 'unknown '}%, heating {'on' if st.get('heating_now') else 'off'}.")
+        lines.append(f"Now {cur}, humidity {st.get('humidity') if st.get('humidity') is not None else 'not reported '}%, heating {'unknown' if st.get('heating_now') is None else 'on' if st.get('heating_now') else 'off'}.")
         for p in z["problems"]:
             lines.append(f"- Problem: {p}")
         if z.get("note"):

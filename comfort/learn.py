@@ -28,13 +28,15 @@ def _series(samples, device_id):
     rows = []
     for s in samples:
         z = (s.get("zones") or {}).get(device_id)
-        if not z or z.get("current_f") is None:
+        if not z or z.get("current_f") is None or not isinstance(z.get("heating"), bool):
+            # A sample whose heating state was not reported cannot say whether a rise
+            # was warm-up or overshoot; treat it as missing rather than "heat off".
             continue
         try:
             ts = dt.datetime.fromisoformat(s["ts"])
         except (KeyError, ValueError):
             continue
-        rows.append({"ts": ts, "t": z["current_f"], "target": z.get("target_f"), "heat": bool(z.get("heating")), "out": s.get("outdoor_f")})
+        rows.append({"ts": ts, "t": z["current_f"], "target": z.get("target_f"), "heat": z["heating"], "out": s.get("outdoor_f")})
     rows.sort(key=lambda r: r["ts"])
     return rows
 

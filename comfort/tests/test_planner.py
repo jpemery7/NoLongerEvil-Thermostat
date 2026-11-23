@@ -193,3 +193,28 @@ def test_tuning_file_is_clamped_and_filtered(tmp_path=None):
         "b": {"note": "nothing usable"}}}}))
     assert run_daily.load_tuning(str(f)) == {"a": {"trim_f": -3.0, "empty_f": 66.0}}
     assert run_daily.load_tuning(str(d / "missing.json")) == {}
+
+
+def test_partial_status_is_unknown_not_false():
+    import nle
+    partial = {"state": {
+        "device.X": {"value": {"backplate_temperature": 21.4, "heater_source": "gas"}},
+        "shared.X": {"value": {"target_temperature": 21.75, "target_temperature_type": "heat"}},
+    }}
+    real_get = nle._get
+    try:
+        nle._get = lambda path: partial
+        st = nle.get_status("X")
+    finally:
+        nle._get = real_get
+    assert st["can_heat"] is True            # heat source and heat mode, though can_heat itself is missing
+    assert st["heating_now"] is None         # not reported is not "off"
+    assert st["current_c"] == 21.4 and st["current_source"] == "backplate"
+    assert set(st["partial"]) == {"current_temperature", "hvac_heater_state", "can_heat"}
+
+
+def test_learning_skips_samples_without_heating_state():
+    import learn
+    t0 = dt.datetime(2026, 11, 20, 0, tzinfo=TZ)
+    samples = [{"ts": (t0 + dt.timedelta(hours=h)).isoformat(), "zones": {"z": {"current_f": 70 + h * 0.1, "heating": None if h % 2 else True}}} for h in range(10)]
+    assert learn.learn_zone(samples, "z")["samples"] == 5

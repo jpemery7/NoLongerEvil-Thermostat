@@ -46,14 +46,28 @@ def get_status(device_id):
         return {}
 
     dev, shared = bucket("device"), bucket("shared")
+    # The service often returns only the fields a thermostat last pushed (after a
+    # reconnect the shared record can hold as few as four). A missing field means
+    # "not reported", never "false": callers get None for anything unknown.
+    current = shared.get("current_temperature")
+    current_source = "shared"
+    if current is None and isinstance(dev.get("backplate_temperature"), (int, float)):
+        current, current_source = dev["backplate_temperature"], "backplate"
+    heater = shared.get("hvac_heater_state")
+    can_heat = shared.get("can_heat")
+    if can_heat is None and (heater is True or dev.get("heater_source") or shared.get("target_temperature_type") in ("heat", "range")):
+        can_heat = True  # it is heating, has a heat source, or is in heat mode
+    expected = ("current_temperature", "target_temperature", "hvac_heater_state", "can_heat")
     return {
         "name": shared.get("name") or "",
-        "current_c": shared.get("current_temperature"),
+        "current_c": current,
+        "current_source": current_source if current is not None else None,
         "target_c": shared.get("target_temperature"),
         "target_type": shared.get("target_temperature_type"),
-        "heating_now": bool(shared.get("hvac_heater_state")),
-        "can_heat": bool(shared.get("can_heat")),
-        "can_cool": bool(shared.get("can_cool")),
+        "heating_now": heater if isinstance(heater, bool) else None,
+        "can_heat": can_heat if isinstance(can_heat, bool) else None,
+        "can_cool": shared.get("can_cool") if isinstance(shared.get("can_cool"), bool) else None,
+        "partial": [k for k in expected if k not in shared],
         "humidity": dev.get("current_humidity"),
         "heater_delivery": dev.get("heater_delivery"),
         "heater_source": dev.get("heater_source"),
