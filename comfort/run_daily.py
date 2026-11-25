@@ -85,6 +85,7 @@ TUNING_KEYS = {
     "empty_f": (55.0, 76.0),    # ceiling for long unoccupied stretches (only ever lowers)
     "max_lead_h": (0.0, 4.0),   # longest warm-up started ahead of a rise; 0 = rise on time
     "coast_h": (0.0, 3.0),      # how early a drop starts, to let the slab coast
+    "offset_f": (-5.0, 2.0),    # added to every scheduled setpoint after planning, holds and setbacks included
 }
 
 
@@ -220,6 +221,12 @@ def main():
         zone["learned"] = learned
         trim = max(-3.0, min(1.0, trim_from_learning(learned) + zone["tuning"].get("trim_f", 0.0)))
         events, notes = planner.plan_zone(zone, profile, days, humidity, trim, bool(st.get("early_on")))
+        offset = zone["tuning"].get("offset_f", 0.0)
+        if offset:
+            # A household-wide shift of the whole schedule. It may go past the intake's
+            # house range on purpose, but never past the hard safety limits.
+            events = [(m, round(max(planner.HARD_MIN_F, min(planner.HARD_MAX_F, t + offset)), 1)) for m, t in events]
+            notes["offset_f"] = offset
         schedule = planner.to_nle_schedule(events)
         previous = [r for r in history if r.get("device_id") == zid and r.get("events")]
         planned_now = planner.planned_temp_at(previous[-1]["events"], now) if previous else None

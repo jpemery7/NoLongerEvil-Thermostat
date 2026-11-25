@@ -218,3 +218,11 @@ def test_learning_skips_samples_without_heating_state():
     t0 = dt.datetime(2026, 11, 20, 0, tzinfo=TZ)
     samples = [{"ts": (t0 + dt.timedelta(hours=h)).isoformat(), "zones": {"z": {"current_f": 70 + h * 0.1, "heating": None if h % 2 else True}}} for h in range(10)]
     assert learn.learn_zone(samples, "z")["samples"] == 5
+
+
+def test_offset_tuning_is_read_and_bounded():
+    import json, tempfile
+    import run_daily
+    f = pathlib.Path(tempfile.mkdtemp()) / "t.json"
+    f.write_text(json.dumps({"zones": {"a": {"offset_f": -1}, "b": {"offset_f": -20}}}))
+    assert run_daily.load_tuning(str(f)) == {"a": {"offset_f": -1.0}, "b": {"offset_f": -5.0}}
